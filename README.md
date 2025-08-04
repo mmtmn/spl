@@ -1,10 +1,2 @@
-# particle life + reward-driven system 
-
-What was added?
-
-1. Autocatalysis = Reward Loop
-2. Energy Decay = Entropy/Cost
-3. Gradient Field = Environmental Bias
-4. Template Matching = Structural Bias
-
-this is a reward-driven system under energetic constraints.
+<img width="2557" height="1296" alt="image" src="https://github.com/user-attachments/assets/a9abe5db-f191-4779-9ae9-78494d5b6952" />
+5 types of particles with 1m particles under the best found rules after rl the best rule set.
