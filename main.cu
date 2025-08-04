@@ -1,6 +1,6 @@
 // main.cu
 
-// to compile: nvcc -o main main.cu -lsfml-graphics -lsfml-window -lsfml-system
+// nvcc -o main main.cu -lsfml-graphics -lsfml-window -lsfml-system
 
 #include <SFML/Graphics.hpp>
 #include <cuda_runtime.h>
@@ -10,27 +10,34 @@
 #include <array>
 #include <iostream>
 
-// Screen settings
 const int width = 2560;
 const int height = 1440;
-const int num_particles = 120000;
+const int num_particles = 10000;
 const int num_green = num_particles / 3;
 const int num_red = num_particles / 3;
 const int num_yellow = num_particles - num_green - num_red;
 
-// Particle structure
+// New constants
+const float energy_decay = 0.01f;
+const float energy_boost = 0.05f;
+const float max_energy = 1.0f;
+const float gradient_strength = 0.002f;
+
+// Extended particle with energy and type
 struct Particle {
-    float x, y, vx, vy;
+    float x, y, vx, vy, energy;
     unsigned char r, g, b, a;
+    int type; // 0 = green, 1 = red, 2 = yellow
 };
 
-// Host-side struct for rendering
-struct HostParticle {
-    float x, y;
-    sf::Color color;
-};
+__device__ float get_gradient_fx(float x) {
+    return gradient_strength * (width / 2.0f - x);
+}
 
-// CUDA kernel to apply interaction and update in one go
+__device__ float get_gradient_fy(float y) {
+    return gradient_strength * (height / 2.0f - y);
+}
+
 __global__ void update_particles_combined(
     Particle* particles,
     int num_particles,
@@ -39,8 +46,6 @@ __global__ void update_particles_combined(
     int group_size,
     int* group_ids
 ) {
-    extern __shared__ Particle shared[];
-
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= group_size) return;
 
@@ -64,11 +69,26 @@ __global__ void update_particles_combined(
 
                 fx += force * dx;
                 fy += force * dy;
+
+                // Autocatalysis: gain energy if same type and close
+                if (p1.type == p2.type && dist < 40.0f) {
+                    p1.energy = fminf(max_energy, p1.energy + energy_boost);
+                }
+
+                // Template match: strong alignment in cluster if dx ≈ dy
+                if (fabsf(dx - dy) < 5.0f) {
+                    fx += 0.02f * dx;
+                    fy += 0.02f * dy;
+                }
             }
         }
     }
 
-    // Velocity update and damping
+    // Add energy gradient toward center
+    fx += get_gradient_fx(p1.x);
+    fy += get_gradient_fy(p1.y);
+
+    // Velocity update
     p1.vx = (p1.vx + fx) * 0.5f;
     p1.vy = (p1.vy + fy) * 0.5f;
 
@@ -76,15 +96,19 @@ __global__ void update_particles_combined(
     p1.x += p1.vx;
     p1.y += p1.vy;
 
-    // Bounce and clamp
+    // Energy decay
+    p1.energy = fmaxf(0.0f, p1.energy - energy_decay);
+
+    // Bounce
     if (p1.x <= 0 || p1.x >= width) p1.vx *= -1;
     if (p1.y <= 0 || p1.y >= height) p1.vy *= -1;
+
+    // Clamp
     p1.x = fminf(fmaxf(p1.x, 0), width);
     p1.y = fminf(fmaxf(p1.y, 0), height);
 }
 
-// Function to create particles
-void create_particles(std::vector<Particle>& particles, int number, sf::Color color) {
+void create_particles(std::vector<Particle>& particles, int number, sf::Color color, int type) {
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_real_distribution<float> dis_x(50, width - 50);
@@ -97,21 +121,23 @@ void create_particles(std::vector<Particle>& particles, int number, sf::Color co
         p.y = dis_y(gen);
         p.vx = dis_v(gen);
         p.vy = dis_v(gen);
+        p.energy = 0.5f;
         p.r = color.r;
         p.g = color.g;
         p.b = color.b;
         p.a = color.a;
+        p.type = type;
         particles.push_back(p);
     }
 }
 
 int main() {
-    sf::RenderWindow window(sf::VideoMode(width, height), "CUDA Particle Sim");
+    sf::RenderWindow window(sf::VideoMode(width, height), "CUDA Biogenesis Sim");
 
     std::vector<Particle> all_particles;
-    create_particles(all_particles, num_green, sf::Color::Green);
-    create_particles(all_particles, num_red, sf::Color::Red);
-    create_particles(all_particles, num_yellow, sf::Color::Yellow);
+    create_particles(all_particles, num_green, sf::Color::Green, 0);
+    create_particles(all_particles, num_red, sf::Color::Red, 1);
+    create_particles(all_particles, num_yellow, sf::Color::Yellow, 2);
 
     Particle* device_particles;
     cudaMalloc(&device_particles, all_particles.size() * sizeof(Particle));
@@ -127,9 +153,9 @@ int main() {
     cudaMemcpy(device_matrix, interaction_matrix, sizeof(interaction_matrix), cudaMemcpyHostToDevice);
 
     int group_ids[7] = {
-        0, num_green, num_green + num_red,        // group offsets
-        num_green, num_red, num_yellow,           // group sizes
-        0                                          // current group index (updated per loop)
+        0, num_green, num_green + num_red,
+        num_green, num_red, num_yellow,
+        0
     };
     int* device_group_ids;
     cudaMalloc(&device_group_ids, sizeof(group_ids));
@@ -144,7 +170,7 @@ int main() {
         }
 
         for (int group = 0; group < 3; ++group) {
-            group_ids[6] = group;  // current group index
+            group_ids[6] = group;
             cudaMemcpy(device_group_ids, group_ids, sizeof(group_ids), cudaMemcpyHostToDevice);
             int offset = group_ids[group];
             int size = group_ids[group + 3];
@@ -154,16 +180,22 @@ int main() {
             );
         }
 
-        cudaDeviceSynchronize();  // Wait for GPU work to finish
-
+        cudaDeviceSynchronize();
         cudaMemcpy(all_particles.data(), device_particles, all_particles.size() * sizeof(Particle), cudaMemcpyDeviceToHost);
 
         window.clear();
-
         sf::VertexArray vertices(sf::Points, all_particles.size());
+
         for (size_t i = 0; i < all_particles.size(); ++i) {
+            int brightness = static_cast<int>(64 + 191 * all_particles[i].energy);
+
             vertices[i].position = sf::Vector2f(all_particles[i].x, all_particles[i].y);
-            vertices[i].color = sf::Color(all_particles[i].r, all_particles[i].g, all_particles[i].b, all_particles[i].a);
+            vertices[i].color = sf::Color(
+                std::min(255, all_particles[i].r + brightness / 3),
+                std::min(255, all_particles[i].g + brightness / 3),
+                std::min(255, all_particles[i].b + brightness / 3),
+                255
+            );
         }
 
         window.draw(vertices);
