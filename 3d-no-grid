@@ -14,7 +14,7 @@ const int width = 512;
 const int height = 512;
 const int depth = 512;
 const int total_groups = 5;
-const int total_particles = 100000;
+const int total_particles = 10000;
 const int particles_per_group = total_particles / total_groups;
 
 struct Particle {
@@ -94,7 +94,8 @@ void create_particles(std::vector<Particle>& particles, int number, int group_id
     std::mt19937 gen(rd());
     std::uniform_real_distribution<float> dis_x(50, width - 50);
     std::uniform_real_distribution<float> dis_y(50, height - 50);
-    std::uniform_real_distribution<float> dis_z(50, depth - 50);
+    std::uniform_real_distribution<float> dis_z(200, depth - 200);
+
     std::uniform_real_distribution<float> dis_v(-1.0f, 1.0f);
     std::uniform_int_distribution<int> dis_c(64, 255);
 
@@ -256,9 +257,6 @@ int main() {
         gluPerspective(60.0, 1024.0 / 768.0, 0.1, 5000.0);
         glMatrixMode(GL_MODELVIEW);
         glLoadIdentity();
-        float frontX = cos(yaw * M_PI / 180.0f) * cos(pitch * M_PI / 180.0f);
-        float frontY = sin(pitch * M_PI / 180.0f);
-        float frontZ = sin(yaw * M_PI / 180.0f) * cos(pitch * M_PI / 180.0f);
         gluLookAt(camX, camY, camZ, camX + frontX, camY + frontY, camZ + frontZ, 0, 1, 0);
 
 
