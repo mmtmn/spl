@@ -60,6 +60,21 @@ __global__ void update_particles_all_to_all(
             fx += force * dx;
             fy += force * dy;
             fz += force * dz;
+
+            // Add this block below
+            if (dist2 < 4.0f) { // assume radius ~1
+                float nx = dx / dist;
+                float ny = dy / dist;
+                float nz = dz / dist;
+
+                float dot = (p1.vx - p2.vx) * nx + (p1.vy - p2.vy) * ny + (p1.vz - p2.vz) * nz;
+                if (dot < 0) {
+                    fx += -dot * nx;
+                    fy += -dot * ny;
+                    fz += -dot * nz;
+                }
+            }
+
         }
     }
 
